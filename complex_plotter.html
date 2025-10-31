@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Complex Plotter — 실수/허수 축까지 그리는 그래프</title>
+  <script src="https://cdn.jsdelivr.net/npm/mathjs@11.8.0/lib/browser/math.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.25.2.min.js"></script>
+  <style>
+    body{font-family: Inter, system-ui, 'Noto Sans KR', sans-serif;margin:0;background:#0b1220;color:#e6eef6}
+    .wrap{max-width:1100px;margin:24px auto;padding:18px}
+    header{display:flex;align-items:center;gap:12px}
+    h1{margin:0;font-size:20px}
+    .controls{display:grid;grid-template-columns:1fr 160px;gap:8px;margin-top:14px}
+    .card{background:rgba(255,255,255,0.03);padding:12px;border-radius:10px}
+    label{display:block;font-size:13px;color:#9fb6c1;margin-bottom:6px}
+    input[type=text], select{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+    button{padding:10px 12px;border-radius:8px;border:none;background:#06b6d4;color:#072235;font-weight:700;cursor:pointer}
+    #plot{height:640px;margin-top:12px;background:#071027;border-radius:10px;padding:6px}
+    .examples{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .chip{background:rgba(255,255,255,0.02);padding:8px 10px;border-radius:999px;cursor:pointer}
+    .muted{color:#94a3b8;font-size:13px}
+    footer{margin-top:12px;color:#94a3b8;font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Complex Plotter</h1>
+        <div class="muted">실수/허수 축(3D)과 2D 복소평면 시각화를 모두 지원합니다.</div>
+      </div>
+      <div style="margin-left:auto;text-align:right">
+        <div class="muted">파일형태: 단일 HTML</div>
+      </div>
+    </header>
+
+    <div class="controls">
+      <div class="card">
+        <label>함수 입력 (x는 실수 입력, 복소수 표현은 a+bi 또는 a+ b i)</label>
+        <input id="fnInput" type="text" value="sin(x) + i*cos(x)" />
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <div style="flex:1">
+            <label>x 범위</label>
+            <input id="rangeInput" type="text" value="-6.28,6.28,0.05" />
+          </div>
+          <div style="width:120px">
+            <label>시각화 타입</label>
+            <select id="modeSelect">
+              <option value="3d">3D: (x, Re(f), Im(f))</option>
+              <option value="2d_complex">2D 복소평면: (Re(f), Im(f))</option>
+              <option value="both">둘 다</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <button id="plotBtn">그리기</button>
+          <button id="resetBtn" style="background:transparent;border:1px solid rgba(255,255,255,0.06);color:#cfe8f2">초기화</button>
+        </div>
+
+        <div style="margin-top:10px">
+          <div class="muted">예시 함수:</div>
+          <div class="examples" id="examples"></div>
+        </div>
+
+        <div style="margin-top:10px" class="muted">설명: 함수는 math.js 문법을 따릅니다. 복소수 단위를 나타낼 때는 'i'를 사용하세요. 예: 'exp(i*x)'</div>
+      </div>
+
+      <div class="card">
+        <div><strong>레이어 설정</strong></div>
+        <label>점/선 두께</label>
+        <input id="lineWidth" type="text" value="3" />
+        <label style="margin-top:8px">색상(선택)</label>
+        <input id="colorInput" type="text" value="#06b6d4" />
+
+        <div style="margin-top:12px">
+          <strong>도움말</strong>
+          <div class="muted" style="margin-top:6px">• x는 실수 입력. 함수는 복소수 값을 반환해야 합니다. 예: sin(x) + i*cos(x)</div>
+          <div class="muted">• 범위 형식: start,end,step</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="plot"></div>
+
+    <footer>브라우저에 파일로 저장해 사용하세요. math.js와 Plotly CDN을 사용합니다.</footer>
+  </div>
+
+<script>
+// 예시 버튼들
+const examples = [
+  'sin(x) + i*cos(x)',
+  'exp(i*x)',
+  'sin(x) + 0.5*i*sin(2*x)',
+  'x + i*(0.1*x^2)',
+  '1/(x - 1) + i*(sin(x))'
+];
+const exArea = document.getElementById('examples');
+examples.forEach(e=>{const b=document.createElement('div');b.className='chip';b.textContent=e;b.onclick=()=>{document.getElementById('fnInput').value=e};exArea.appendChild(b)});
+
+function parseRange(str){const parts=str.split(',').map(s=>parseFloat(s.trim())); if(parts.length<3) return null; const [a,b,step]=parts; if(isNaN(a)||isNaN(b)||isNaN(step)||step<=0) return null; const arr=[]; for(let x=a;x<=b+1e-9;x+=step) arr.push(x); return arr}
+
+function safeEvalComplex(expr, xVal){
+  // math.js parse
+  try{
+    const scope = {x: xVal, i: math.complex(0,1)};
+    const node = math.parse(expr);
+    const res = node.evaluate(scope);
+    // normalize to complex
+    if(typeof res === 'number') return math.complex(res,0);
+    if(res instanceof Object && 're' in res && 'im' in res) return math.complex(res.re,res.im);
+    return math.complex(res);
+  } catch(e){throw e}
+}
+
+function buildTraces(xs, zsComplex, opts){
+  // xs: real input array
+  // zsComplex: array of math.complex
+  const re = zsComplex.map(c=>c.re);
+  const im = zsComplex.map(c=>c.im);
+  const color = opts.color || '#06b6d4';
+  const width = Number(opts.width)||3;
+
+  const trace3d = {
+    x: xs,
+    y: re,
+    z: im,
+    mode: 'lines+markers',
+    type: 'scatter3d',
+    line:{width: width},
+    marker:{size:3},
+    name: 'f(x) (Re/Im)'
+  };
+
+  const trace2d = {
+    x: re,
+    y: im,
+    mode: 'lines+markers',
+    type: 'scatter',
+    name: '복소평면',
+    line:{width: width},
+    marker:{size:6}
+  };
+
+  return {trace3d, trace2d};
+}
+
+function plot(){
+  const expr = document.getElementById('fnInput').value.trim();
+  const rangeStr = document.getElementById('rangeInput').value.trim();
+  const mode = document.getElementById('modeSelect').value;
+  const color = document.getElementById('colorInput').value.trim() || '#06b6d4';
+  const width = document.getElementById('lineWidth').value.trim() || 3;
+
+  const xs = parseRange(rangeStr);
+  if(!xs){alert('범위 형식이 잘못되었습니다. 예: -6.28,6.28,0.05'); return}
+
+  // evaluate
+  const zs = [];
+  try{
+    for(const x of xs){
+      const z = safeEvalComplex(expr, x);
+      zs.push(z);
+    }
+  } catch(err){alert('함수 평가 오류: ' + err); return}
+
+  const {trace3d, trace2d} = buildTraces(xs, zs, {color,width});
+
+  const data = [];
+  const layout = {
+    paper_bgcolor: '#071027', plot_bgcolor: '#071027',
+    font:{color:'#d7f6fb'},
+    margin:{l:60,r:20,t:40,b:60}
+  };
+
+  if(mode==='3d' || mode==='both'){
+    data.push(trace3d);
+    layout.scene = {xaxis:{title:'x (input)'}, yaxis:{title:'Re(f)'}, zaxis:{title:'Im(f)'}};
+  }
+  if(mode==='2d_complex' || mode==='both'){
+    data.push(trace2d);
+    // if both, draw 2D beneath as subplot? Simpler: show overlay with separate yaxis disabled
+    if(mode==='both'){
+      // show 2D in a separate small subplot area using domain
+      layout.grid = {rows:2, columns:1, pattern:'independent'};
+    } else {
+      layout.xaxis = {title:'Re(f)'}; layout.yaxis = {title:'Im(f)'};
+    }
+  }
+
+  // Plotly single plot: if both, create separate subplots using subplots
+  if(mode==='both'){
+    const fig = {
+      data: [
+        {...trace3d, scene:'scene1'},
+        {...trace2d, xaxis:'x2', yaxis:'y2'}
+      ],
+      layout: {
+        ...layout,
+        scene: {domain:{x:[0,1],y:[0.55,1]}, xaxis:{title:'x(input)'}, yaxis:{title:'Re(f)'}, zaxis:{title:'Im(f)'}},
+        xaxis2:{domain:[0,1],anchor:'y2',title:'Re(f)'},
+        yaxis2:{domain:[0,0.45],anchor:'x2',title:'Im(f)'},
+        height:720
+      }
+    };
+    Plotly.newPlot('plot', fig.data, fig.layout, {responsive:true});
+    return;
+  }
+
+  Plotly.newPlot('plot', data, layout, {responsive:true});
+}
+
+document.getElementById('plotBtn').addEventListener('click', plot);
+document.getElementById('resetBtn').addEventListener('click', ()=>{document.getElementById('fnInput').value='sin(x) + i*cos(x)';document.getElementById('rangeInput').value='-6.28,6.28,0.05';document.getElementById('modeSelect').value='3d';document.getElementById('colorInput').value='#06b6d4';document.getElementById('lineWidth').value='3';});
+
+// initial plot
+plot();
+</script>
+</body>
+</html>
